@@ -62,8 +62,24 @@ extension Path {
             throw PathArgumentError.unmatchedAbsolutePath
         }
 
-        return Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
-                                                   relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
-                                                   memo: []))
+        let outBuffer = calloc(Int(PATH_MAX + 1), 1).assumingMemoryBound(to: Int8.self)
+        let baseOutBuffer = calloc(Int(PATH_MAX + 1), 1).assumingMemoryBound(to: Int8.self)
+        let can = string.withCString { stringBuffer in
+            realpath(stringBuffer, outBuffer)
+            return canonicalize_
+        }
+        let _ = base.string.withCString { baseStringBuffer in
+            realpath(baseStringBuffer, baseOutBuffer)
+        }
+        assert(strlen(baseOutBuffer) <= strlen(outBuffer))
+        let path = outBuffer.advanced(by: strlen(baseOutBuffer) + 1)
+        let act = Path(String(cString: path))
+        let exp = Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
+                                                      relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
+                                                      memo: []))
+        assert(act == exp)
+        free(outBuffer)
+        free(baseOutBuffer)
+        return exp
     }
 }

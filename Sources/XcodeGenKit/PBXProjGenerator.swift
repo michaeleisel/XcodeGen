@@ -220,7 +220,15 @@ public class PBXProjGenerator {
             pbxProject.projects = subprojects
         }
 
-        try project.targets.forEach(generateTarget)
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1
+        for t in project.targets {
+            queue.addOperation {
+                try! self.generateTarget(t)
+            }
+        }
+        queue.waitUntilAllOperationsAreFinished()
+        //try project.targets.forEach(generateTarget)
         try project.aggregateTargets.forEach(generateAggregateTarget)
 
         if !carthageFrameworksByPlatform.isEmpty {
