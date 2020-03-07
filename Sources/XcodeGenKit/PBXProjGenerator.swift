@@ -277,9 +277,7 @@ public class PBXProjGenerator {
             derivedGroups.append(group)
         }
 
-        sourceGenerator.rootGroupsMutex.get { (rootGroups) -> () in
-            mainGroup.children = Array(rootGroups)
-        }
+        mainGroup.children = Array(sourceGenerator.rootGroups)
         var operations: [Operation] = sortGroups(group: mainGroup)
         // add derived groups at the end
         operations += derivedGroups.flatMap { sortGroups(group: $0) }
