@@ -4,6 +4,7 @@ import ProjectSpec
 import XcodeProj
 import Yams
 import Version
+import QuartzCore
 
 public class PBXProjGenerator {
 
@@ -220,14 +221,14 @@ public class PBXProjGenerator {
             pbxProject.projects = subprojects
         }
 
-        let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 1
+        //let queue = OperationQueue()
+        //queue.maxConcurrentOperationCount = 1
         for t in project.targets {
-            queue.addOperation {
+            //queue.addOperation {
                 try! self.generateTarget(t)
-            }
+            //}
         }
-        queue.waitUntilAllOperationsAreFinished()
+        //queue.waitUntilAllOperationsAreFinished()
         //try project.targets.forEach(generateTarget)
         try project.aggregateTargets.forEach(generateAggregateTarget)
 
@@ -276,10 +277,16 @@ public class PBXProjGenerator {
             derivedGroups.append(group)
         }
 
-        mainGroup.children = Array(sourceGenerator.rootGroups)
-        sortGroups(group: mainGroup)
+        sourceGenerator.rootGroupsMutex.get { (rootGroups) -> () in
+            mainGroup.children = Array(rootGroups)
+        }
+        var operations: [Operation] = sortGroups(group: mainGroup)
         // add derived groups at the end
-        derivedGroups.forEach(sortGroups)
+        operations += derivedGroups.flatMap { sortGroups(group: $0) }
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 8
+        queue.qualityOfService = .userInteractive
+        queue.addOperations(operations, waitUntilFinished: true)
         mainGroup.children += derivedGroups
             .sorted(by: PBXFileElement.sortByNamePath)
             .map { $0 }
@@ -552,28 +559,32 @@ public class PBXProjGenerator {
         return targetAttributes
     }
 
-    func sortGroups(group: PBXGroup) {
+    func sortGroups(group: PBXGroup) -> [Operation] {
+        group.children = group.children.filter { $0 != group }
         // sort children
-        let children = group.children
-            .sorted { child1, child2 in
-                let sortOrder1 = child1.getSortOrder(groupSortPosition: project.options.groupSortPosition)
-                let sortOrder2 = child2.getSortOrder(groupSortPosition: project.options.groupSortPosition)
+        let operation = BlockOperation {
+            let children = group.children
+                .sorted { child1, child2 in
+                    let sortOrder1 = child1.getSortOrder(groupSortPosition: self.project.options.groupSortPosition)
+                    let sortOrder2 = child2.getSortOrder(groupSortPosition: self.project.options.groupSortPosition)
 
-                if sortOrder1 != sortOrder2 {
-                    return sortOrder1 < sortOrder2
-                } else {
-                    if (child1.name, child1.path) != (child2.name, child2.path) {
-                        return PBXFileElement.sortByNamePath(child1, child2)
+                    if sortOrder1 != sortOrder2 {
+                        return sortOrder1 < sortOrder2
                     } else {
-                        return child1.context ?? "" < child2.context ?? ""
+                        if (child1.name, child1.path) != (child2.name, child2.path) {
+                            return PBXFileElement.sortByNamePath(child1, child2)
+                        } else {
+                            return child1.context ?? "" < child2.context ?? ""
+                        }
                     }
                 }
-            }
-        group.children = children.filter { $0 != group }
+            group.children = children
+        }
 
         // sort sub groups
         let childGroups = group.children.compactMap { $0 as? PBXGroup }
-        childGroups.forEach(sortGroups)
+        let operations: [Operation] = [operation] + childGroups.flatMap { sortGroups(group: $0) }
+        return operations
     }
 
     func getPBXProj(from reference: ProjectReference) throws -> PBXProj {
@@ -1312,10 +1323,13 @@ extension Platform {
     }
 }
 
+let pbxId = ObjectIdentifier(PBXGroup.self)
+
 extension PBXFileElement {
 
     public func getSortOrder(groupSortPosition: SpecOptions.GroupSortPosition) -> Int {
-        if type(of: self).isa == "PBXGroup" {
+        //if type(of: self).isa == "PBXGroup" {
+        if ObjectIdentifier(self) == pbxId {
             switch groupSortPosition {
             case .top: return -1
             case .bottom: return 1

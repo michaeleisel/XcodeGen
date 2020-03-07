@@ -11,7 +11,7 @@
 extern "C" {
 #endif
 
-const char *relativePath(const char *path, const char *base);
+const char *relativePath2(const char *path, const char *base);
 
 #ifdef __cplusplus
 }

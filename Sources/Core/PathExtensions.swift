@@ -1,6 +1,9 @@
 import Foundation
 import PathKit
 
+var za: Int = 0
+var zb: Int = 0
+
 extension Path {
     /// Returns a Path without any inner parent directory references.
     ///
@@ -11,7 +14,22 @@ extension Path {
     /// - `../a/b` simplifies to `../a/b`
     /// - `a/../../c` simplifies to `../c`
     public func simplifyingParentDirectoryReferences() -> Path {
-        normalize().components.reduce(Path(), +)
+        var comps: [String] = []
+        //var skips = 0
+        for comp in normalize().components {
+            if comp == ".." {
+                if let last = comps.last, last != ".." {
+                    let _ = comps.dropLast()
+                } else {
+                    comps.append("..")
+                }
+            } else {
+                comps.append(comp)
+            }
+        }
+        let path = Path(components: comps)
+        //assert(path == normalize().components.reduce(Path(), +))
+        return path
     }
 
     /// Returns the relative path necessary to go from `base` to `self`.
@@ -20,6 +38,21 @@ extension Path {
     /// - throws: Throws an error when the path types do not match, or when `base` has so many parent path components
     ///           that it refers to an unknown parent directory.
     public func relativePath(from base: Path) throws -> Path {
+        if string.hasPrefix(base.string) {
+            return Path(String(string.suffix(from: base.string.endIndex)))
+        }
+        /*if !string.contains("+") {
+            let relativeBuffer = string.withCString { stringBuffer in
+                return base.string.withCString { baseStringBuffer in
+                    return relativePath2(stringBuffer, baseStringBuffer)!
+                }
+            }
+
+            let path = String(cString: relativeBuffer)
+            free(UnsafeMutableRawPointer(mutating: relativeBuffer))
+            return Path(path)
+        }*/
+
         enum PathArgumentError: Error {
             /// Can't back out of an unknown parent directory
             case unknownParentDirectory
@@ -62,24 +95,10 @@ extension Path {
             throw PathArgumentError.unmatchedAbsolutePath
         }
 
-        let outBuffer = calloc(Int(PATH_MAX + 1), 1).assumingMemoryBound(to: Int8.self)
-        let baseOutBuffer = calloc(Int(PATH_MAX + 1), 1).assumingMemoryBound(to: Int8.self)
-        let can = string.withCString { stringBuffer in
-            realpath(stringBuffer, outBuffer)
-            return canonicalize_
-        }
-        let _ = base.string.withCString { baseStringBuffer in
-            realpath(baseStringBuffer, baseOutBuffer)
-        }
-        assert(strlen(baseOutBuffer) <= strlen(outBuffer))
-        let path = outBuffer.advanced(by: strlen(baseOutBuffer) + 1)
-        let act = Path(String(cString: path))
         let exp = Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
-                                                      relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
-                                                      memo: []))
-        assert(act == exp)
-        free(outBuffer)
-        free(baseOutBuffer)
-        return exp
+                                                   relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
+                                                   memo: []))
+
+        return exp //Path(path)
     }
 }

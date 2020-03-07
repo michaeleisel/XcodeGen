@@ -12,8 +12,14 @@ extension PBXFileElement {
     }
 
     private var namePathSortString: String {
-        // This string needs to be unique for all combinations of name & path or the order won't be stable.
         return "\(name ?? path ?? "")\t\(name ?? "")\t\(path ?? "")"
+        // This string needs to be unique for all combinations of name & path or the order won't be stable.
+        /*if let string = cachedNamePathSortString {
+            return string
+        }
+        let string = "\(name ?? path ?? "")\t\(name ?? "")\t\(path ?? "")"
+        cachedNamePathSortString = string
+        return string*/
     }
 }
 
