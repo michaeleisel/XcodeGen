@@ -222,15 +222,18 @@ public class PBXProjGenerator {
         }
 
         let dependencies = try project.targets.map(self.generateTargetDependencies)
+        let ss2 = CACurrentMediaTime()
         let queue = OperationQueue()
-        queue.maxConcurrentOperationCount = 8
+        //queue.maxConcurrentOperationCount = 1
         var output: [[SourceFile]?] = Array(repeating: nil, count: project.targets.count)
-        let operations = project.targets.enumerated().map { (idx, target) in
-            return BlockOperation {
+        project.targets.enumerated().forEach { (idx, target) in
+            //return BlockOperation {
                 output[idx] = self.getAllSourceFiles(target)
-            }
+            //}
         }
-        queue.addOperations(operations, waitUntilFinished: true)
+        //queue.addOperations(operations, waitUntilFinished: true)
+        let ee2 = CACurrentMediaTime()
+        print("zz \(ee2 - ss2)")
         for i in 0..<project.targets.count {
             try generateTarget(project.targets[i], carthageDependencies: dependencies[i], sourceFiles: output[i]!)
         }
@@ -284,14 +287,16 @@ public class PBXProjGenerator {
             derivedGroups.append(group)
         }
 
-        mainGroup.children = Array(sourceGenerator.rootGroups)
+        sourceGenerator.rootGroupsMutex.get { (rootGroups) -> () in
+            mainGroup.children = Array(rootGroups)
+        }
         var ops: [Operation] = sortGroups(group: mainGroup)
         // add derived groups at the end
         ops += derivedGroups.flatMap { sortGroups(group: $0) }
         let q = OperationQueue()
         q.maxConcurrentOperationCount = 8
         q.qualityOfService = .userInteractive
-        q.addOperations(operations, waitUntilFinished: true)
+        q.addOperations(ops, waitUntilFinished: true)
         mainGroup.children += derivedGroups
             .sorted(by: PBXFileElement.sortByNamePath)
             .map { $0 }

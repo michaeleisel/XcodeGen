@@ -11,14 +11,50 @@ struct SourceFile {
     let buildPhase: TargetSource.BuildPhase?
 }
 
+class Mutex<T> {
+    var value: T
+    var mutex: pthread_mutex_t = pthread_mutex_t()
+    init(_ value: T) {
+        self.value = value
+        pthread_mutex_init(&mutex, nil)
+    }
+
+    func getThrowing(closure: (inout T) throws -> (T)) throws {
+        pthread_mutex_lock(&mutex)
+        let newValue = try closure(&value)
+        value = newValue
+        pthread_mutex_unlock(&mutex)
+    }
+
+    func getThrowing(closure: (inout T) throws -> ()) throws {
+        pthread_mutex_lock(&mutex)
+        try closure(&value)
+        pthread_mutex_unlock(&mutex)
+    }
+
+    func get<U>(closure: (inout T) -> (U)) -> U {
+        pthread_mutex_lock(&mutex)
+        let newValue = closure(&value)
+        //value = newValue
+        pthread_mutex_unlock(&mutex)
+        return newValue
+    }
+
+    func get(closure: (inout T) -> ()) {
+        pthread_mutex_lock(&mutex)
+        closure(&value)
+        pthread_mutex_unlock(&mutex)
+    }
+}
+
 class SourceGenerator {
 
-    var rootGroups: Set<PBXFileElement> = []
+    var rootGroupsMutex: Mutex<Set<PBXFileElement>> = Mutex([])
     private let projectDirectory: Path?
-    private var fileReferencesByPath: [String: PBXFileElement] = [:]
-    private var groupsByPath: [Path: PBXGroup] = [:]
-    private var variantGroupsByPath: [Path: PBXVariantGroup] = [:]
-    private var localPackageGroup: PBXGroup?
+    private var fileReferencesByPathMutex: Mutex<[String: PBXFileElement]> = Mutex([:])
+    private var groupsByPathMutex: Mutex<[Path: PBXGroup]> = Mutex([:])
+    private var variantGroupsByPathMutex: Mutex<[Path: PBXVariantGroup]> = Mutex([:])
+    private var localPackageGroupMutex: Mutex<PBXGroup?> = Mutex(nil)
 
     private let project: Project
     let pbxProj: PBXProj
@@ -54,21 +90,26 @@ class SourceGenerator {
     }
 
     func createLocalPackage(path: Path) throws {
-
-        if localPackageGroup == nil {
-            let groupName = project.options.localPackagesGroup ?? "Packages"
-            localPackageGroup = addObject(PBXGroup(sourceTree: .sourceRoot, name: groupName))
-            rootGroups.insert(localPackageGroup!)
-        }
-        let fileReference = addObject(
-            PBXFileReference(
-                sourceTree: .sourceRoot,
-                name: path.lastComponent,
-                lastKnownFileType: "folder",
-                path: try path.relativePath(from: project.basePath).string
+        try localPackageGroupMutex.getThrowing { (originalLocalPackageGroup) -> (PBXGroup?) in
+            var localPackageGroup = originalLocalPackageGroup
+            if localPackageGroup == nil {
+                let groupName = project.options.localPackagesGroup ?? "Packages"
+                localPackageGroup = addObject(PBXGroup(sourceTree: .sourceRoot, name: groupName))
+                rootGroupsMutex.get { rootGroups in
+                    rootGroups.insert(localPackageGroup!)
+                }
+            }
+            let fileReference = addObject(
+                PBXFileReference(
+                    sourceTree: .sourceRoot,
+                    name: path.lastComponent,
+                    lastKnownFileType: "folder",
+                    path: try path.relativePath(from: project.basePath).string
+                )
             )
-        )
-        localPackageGroup!.children.append(fileReference)
+            localPackageGroup!.children.append(fileReference)
+            return localPackageGroup
+        }
     }
 
     func getAllSourceFiles(targetType: PBXProductType, sources: [TargetSource]) throws -> [SourceFile] {
@@ -81,8 +122,11 @@ class SourceGenerator {
         _ = try getSourceFiles(targetType: .none, targetSource: TargetSource(path: path), path: fullPath)
     }
 
-    func generateSourceFile(targetType: PBXProductType, targetSource: TargetSource, path: Path, buildPhase: TargetSource.BuildPhase? = nil, fileReference: PBXFileElement? = nil) -> SourceFile {
-        let fileReference = fileReference ?? fileReferencesByPath[path.string.lowercased()]!
+    func generateSourceFile(targetType: PBXProductType, targetSource: TargetSource, path: Path, buildPhase: TargetSource.BuildPhase? = nil, fileReference passedFileReference: PBXFileElement? = nil) -> SourceFile {
+        let fileReference: PBXFileElement = passedFileReference ??
+            fileReferencesByPathMutex.get { fileReferencesByPath in
+                return fileReferencesByPath[path.string.lowercased()]!
+            }
         var settings: [String: Any] = [:]
         var attributes: [String] = targetSource.attributes
         var chosenBuildPhase: TargetSource.BuildPhase?
@@ -159,63 +203,77 @@ class SourceGenerator {
 
     func getFileReference(path: Path, inPath: Path, name: String? = nil, sourceTree: PBXSourceTree = .group, lastKnownFileType: String? = nil) -> PBXFileElement {
         let fileReferenceKey = path.string.lowercased()
-        if let fileReference = fileReferencesByPath[fileReferenceKey] {
+        var fileReference: PBXFileElement?
+        fileReferencesByPathMutex.get{ fileReferencesByPath in
+            fileReference = fileReferencesByPath[fileReferenceKey]
+        }
+        if let fileReference = fileReference {
             return fileReference
-        } else {
-            let fileReferencePath = (try? path.relativePath(from: inPath)) ?? path
-            var fileReferenceName: String? = name ?? fileReferencePath.lastComponent
-            if fileReferencePath.string == fileReferenceName {
-                fileReferenceName = nil
-            }
-            let lastKnownFileType = lastKnownFileType ?? Xcode.fileType(path: path)
-
-            if path.extension == "xcdatamodeld" {
-                let versionedModels = (try? path.children()) ?? []
-
-                // Sort the versions alphabetically
-                let sortedPaths = versionedModels
-                    .filter { $0.extension == "xcdatamodel" }
-                    .sorted { $0.string.localizedStandardCompare($1.string) == .orderedAscending }
-
-                let modelFileReferences =
-                    sortedPaths.map { path in
-                        addObject(
-                            PBXFileReference(
-                                sourceTree: .group,
-                                lastKnownFileType: "wrapper.xcdatamodel",
-                                path: path.lastComponent
-                            )
-                        )
-                    }
-                // If no current version path is found we fall back to alphabetical
-                // order by taking the last item in the sortedPaths array
-                let currentVersionPath = findCurrentCoreDataModelVersionPath(using: versionedModels) ?? sortedPaths.last
-                let currentVersion: PBXFileReference? = {
-                    guard let indexOf = sortedPaths.firstIndex(where: { $0 == currentVersionPath }) else { return nil }
-                    return modelFileReferences[indexOf]
-                }()
-                let versionGroup = addObject(XCVersionGroup(
-                    currentVersion: currentVersion,
-                    path: fileReferencePath.string,
-                    sourceTree: sourceTree,
-                    versionGroupType: "wrapper.xcdatamodel",
-                    children: modelFileReferences
-                ))
-                fileReferencesByPath[fileReferenceKey] = versionGroup
-                return versionGroup
+        }
+        let newRef = createFileReference(path: path, inPath: inPath, name: name, sourceTree: sourceTree, lastKnownFileType: lastKnownFileType)
+        fileReferencesByPathMutex.get { (fileReferencesByPath) -> () in
+            if let ref = fileReferencesByPath[fileReferenceKey] {
+                fileReference = ref
             } else {
-                // For all extensions other than `xcdatamodeld`
-                let fileReference = addObject(
-                    PBXFileReference(
-                        sourceTree: sourceTree,
-                        name: fileReferenceName,
-                        lastKnownFileType: lastKnownFileType,
-                        path: fileReferencePath.string
-                    )
-                )
-                fileReferencesByPath[fileReferenceKey] = fileReference
-                return fileReference
+                fileReferencesByPath[fileReferenceKey] = newRef
+                fileReference = newRef
             }
+        }
+        return fileReference!
+    }
+
+    func createFileReference(path: Path, inPath: Path, name: String? = nil, sourceTree: PBXSourceTree = .group, lastKnownFileType: String? = nil) -> PBXFileElement {
+        let fileReferencePath = (try? path.relativePath(from: inPath)) ?? path
+        var fileReferenceName: String? = name ?? fileReferencePath.lastComponent
+        if fileReferencePath.string == fileReferenceName {
+            fileReferenceName = nil
+        }
+        let lastKnownFileType = lastKnownFileType ?? Xcode.fileType(path: path)
+
+        if path.extension == "xcdatamodeld" {
+            let versionedModels = (try? path.children()) ?? []
+
+            // Sort the versions alphabetically
+            let sortedPaths = versionedModels
+                .filter { $0.extension == "xcdatamodel" }
+                .sorted { $0.string.localizedStandardCompare($1.string) == .orderedAscending }
+
+            let modelFileReferences =
+                sortedPaths.map { path in
+                    addObject(
+                        PBXFileReference(
+                            sourceTree: .group,
+                            lastKnownFileType: "wrapper.xcdatamodel",
+                            path: path.lastComponent
+                        )
+                    )
+                }
+            // If no current version path is found we fall back to alphabetical
+            // order by taking the last item in the sortedPaths array
+            let currentVersionPath = findCurrentCoreDataModelVersionPath(using: versionedModels) ?? sortedPaths.last
+            let currentVersion: PBXFileReference? = {
+                guard let indexOf = sortedPaths.firstIndex(where: { $0 == currentVersionPath }) else { return nil }
+                return modelFileReferences[indexOf]
+            }()
+            let versionGroup = addObject(XCVersionGroup(
+                currentVersion: currentVersion,
+                path: fileReferencePath.string,
+                sourceTree: sourceTree,
+                versionGroupType: "wrapper.xcdatamodel",
+                children: modelFileReferences
+            ))
+            return versionGroup
+        } else {
+            // For all extensions other than `xcdatamodeld`
+            let fileReference = addObject(
+                PBXFileReference(
+                    sourceTree: sourceTree,
+                    name: fileReferenceName,
+                    lastKnownFileType: lastKnownFileType,
+                    path: fileReferencePath.string
+                )
+            )
+            return fileReference
         }
     }
 
@@ -276,65 +334,71 @@ class SourceGenerator {
     /// Create a group or return an existing one at the path.
     /// Any merged children are added to a new group or merged into an existing one.
     private func getGroup(path: Path, name: String? = nil, mergingChildren children: [PBXFileElement], createIntermediateGroups: Bool, hasCustomParent: Bool, isBaseGroup: Bool) -> PBXGroup {
-        let groupReference: PBXGroup
+        return groupsByPathMutex.get { (groupsByPath) -> (PBXGroup) in
+            let groupReference: PBXGroup
 
-        if let cachedGroup = groupsByPath[path] {
-            var cachedGroupChildren = cachedGroup.children
-            for child in children {
-                // only add the children that aren't already in the cachedGroup
-                // Check equality by path and sourceTree because XcodeProj.PBXObject.== is very slow.
-                if !cachedGroupChildren.contains(where: { $0.name == child.name && $0.path == child.path && $0.sourceTree == child.sourceTree }) {
-                    cachedGroupChildren.append(child)
-                    child.parent = cachedGroup
+            if let cachedGroup = groupsByPath[path] {
+                var cachedGroupChildren = cachedGroup.children
+                for child in children {
+                    // only add the children that aren't already in the cachedGroup
+                    // Check equality by path and sourceTree because XcodeProj.PBXObject.== is very slow.
+                    if !cachedGroupChildren.contains(where: { $0.name == child.name && $0.path == child.path && $0.sourceTree == child.sourceTree }) {
+                        cachedGroupChildren.append(child)
+                        child.parent = cachedGroup
+                    }
+                }
+                cachedGroup.children = cachedGroupChildren
+                groupReference = cachedGroup
+            } else {
+
+                // lives outside the project base path
+                let isOutOfBasePath = !path.absolute().string.contains(project.basePath.absolute().string)
+
+                // has no valid parent paths
+                let isRootPath = (isBaseGroup && isOutOfBasePath) || path.parent() == project.basePath
+
+                // is a top level group in the project
+                let isTopLevelGroup = !hasCustomParent && ((isBaseGroup && !createIntermediateGroups) || isRootPath)
+
+                let groupName = name ?? path.lastComponent
+
+                let groupPath = resolveGroupPath(path, isTopLevelGroup: hasCustomParent || isTopLevelGroup)
+
+                let group = PBXGroup(
+                    children: children,
+                    sourceTree: .group,
+                    name: groupName != groupPath ? groupName : nil,
+                    path: groupPath
+                )
+                groupReference = addObject(group)
+                groupsByPath[path] = groupReference
+
+                if isTopLevelGroup {
+                    rootGroupsMutex.get { rootGroups in
+                        rootGroups.insert(groupReference)
+                    }
                 }
             }
-            cachedGroup.children = cachedGroupChildren
-            groupReference = cachedGroup
-        } else {
-
-            // lives outside the project base path
-            let isOutOfBasePath = !path.absolute().string.contains(project.basePath.absolute().string)
-
-            // has no valid parent paths
-            let isRootPath = (isBaseGroup && isOutOfBasePath) || path.parent() == project.basePath
-
-            // is a top level group in the project
-            let isTopLevelGroup = !hasCustomParent && ((isBaseGroup && !createIntermediateGroups) || isRootPath)
-
-            let groupName = name ?? path.lastComponent
-
-            let groupPath = resolveGroupPath(path, isTopLevelGroup: hasCustomParent || isTopLevelGroup)
-
-            let group = PBXGroup(
-                children: children,
-                sourceTree: .group,
-                name: groupName != groupPath ? groupName : nil,
-                path: groupPath
-            )
-            groupReference = addObject(group)
-            groupsByPath[path] = groupReference
-
-            if isTopLevelGroup {
-                rootGroups.insert(groupReference)
-            }
+            return groupReference
         }
-        return groupReference
     }
 
     /// Creates a variant group or returns an existing one at the path
     private func getVariantGroup(path: Path, inPath: Path) -> PBXVariantGroup {
-        let variantGroup: PBXVariantGroup
-        if let cachedGroup = variantGroupsByPath[path] {
-            variantGroup = cachedGroup
-        } else {
-            let group = PBXVariantGroup(
-                sourceTree: .group,
-                name: path.lastComponent
-            )
-            variantGroup = addObject(group)
-            variantGroupsByPath[path] = variantGroup
+        return variantGroupsByPathMutex.get { (variantGroupsByPath) -> (PBXVariantGroup) in
+            let variantGroup: PBXVariantGroup
+            if let cachedGroup = variantGroupsByPath[path] {
+                variantGroup = cachedGroup
+            } else {
+                let group = PBXVariantGroup(
+                    sourceTree: .group,
+                    name: path.lastComponent
+                )
+                variantGroup = addObject(group)
+                variantGroupsByPath[path] = variantGroup
+            }
+            return variantGroup
         }
-        return variantGroup
     }
 
     /// Collects all the excluded paths within the targetSource
@@ -564,7 +628,9 @@ class SourceGenerator {
             )
 
             if !(createIntermediateGroups || hasCustomParent) || path.parent() == project.basePath {
-                rootGroups.insert(fileReference)
+                rootGroupsMutex.get { rootGroups in
+                    rootGroups.insert(fileReference)
+                }
             }
 
             let buildPhase: TargetSource.BuildPhase?
@@ -590,7 +656,9 @@ class SourceGenerator {
             } else if parentPath == project.basePath {
                 sourcePath = path
                 sourceReference = fileReference
-                rootGroups.insert(fileReference)
+                rootGroupsMutex.get { rootGroups in
+                    rootGroups.insert(fileReference)
+                }
             } else {
                 let parentGroup = getGroup(
                     path: parentPath,
@@ -646,7 +714,9 @@ class SourceGenerator {
 
         let parentPath = project.basePath + Path(parentGroups.joined(separator: "/"))
         let parentPathExists = parentPath.exists
-        let parentGroupAlreadyExists = groupsByPath[parentPath] != nil
+        let parentGroupAlreadyExists = groupsByPathMutex.get { (groupsByPath) -> (Bool) in
+             return groupsByPath[parentPath] != nil
+        }
 
         let parentGroup = getGroup(
             path: parentPath,
@@ -676,7 +746,7 @@ class SourceGenerator {
             return
         }
 
-        let hasParentGroup = groupsByPath[parentPath] != nil
+        let hasParentGroup = groupsByPathMutex.get { groupsByPath in return groupsByPath[parentPath] != nil }
         let parentGroup = getGroup(
             path: parentPath,
             mergingChildren: [fileElement],
