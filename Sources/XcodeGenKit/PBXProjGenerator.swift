@@ -270,9 +270,13 @@ public class PBXProjGenerator {
         }
 
         mainGroup.children = Array(sourceGenerator.rootGroups)
-        sortGroups(group: mainGroup)
+        var ops = sortGroups(group: mainGroup)
+        let queue = OperationQueue()
+        queue.qualityOfService = .userInteractive
+        queue.maxConcurrentOperationCount = 8
         // add derived groups at the end
-        derivedGroups.forEach(sortGroups)
+        ops += derivedGroups.flatMap(sortGroups)
+        queue.addOperations(ops, waitUntilFinished: true)
         mainGroup.children += derivedGroups
             .sorted(by: PBXFileElement.sortByNamePath)
             .map { $0 }
@@ -585,8 +589,27 @@ public class PBXProjGenerator {
     func generateTarget(_ target: Target) throws {
         let carthageDependencies = carthageResolver.dependencies(for: target)
 
+        var pathToLastComponent: [String: String] = [:]
         let sourceFiles = try sourceGenerator.getAllSourceFiles(targetType: target.type, sources: target.sources)
-            .sorted { $0.path.lastComponent < $1.path.lastComponent }
+            .sorted {
+                let firstP: String
+                if let cachedFirstP = pathToLastComponent[$0.path.string] {
+                    firstP = cachedFirstP
+                } else {
+                    let c = $0.path.lastComponent
+                    pathToLastComponent[$0.path.string] = c
+                    firstP = c
+                }
+                let secondP: String
+                if let cachedSecondP = pathToLastComponent[$1.path.string] {
+                    secondP = cachedSecondP
+                } else {
+                    let c = $1.path.lastComponent
+                    pathToLastComponent[$1.path.string] = c
+                    secondP = c
+                }
+                return firstP < secondP
+        }
 
         var plistPath: Path?
         var searchForPlist = true

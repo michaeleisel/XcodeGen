@@ -4,8 +4,7 @@ import PathKit
 import Yams
 
 extension Dictionary where Key: JSONKey {
-
-    public func json<T: NamedJSONDictionaryConvertible>(atKeyPath keyPath: JSONUtilities.KeyPath, invalidItemBehaviour: InvalidItemBehaviour<T> = .remove) throws -> [T] {
+    public func json<T: NamedJSONDictionaryConvertible>(atKeyPath keyPath: JSONUtilities.KeyPath, invalidItemBehaviour: InvalidItemBehaviour<T> = .remove, parallel: Bool = false) throws -> [T] {
         guard let dictionary = json(atKeyPath: keyPath) as JSONDictionary? else {
             return []
         }
