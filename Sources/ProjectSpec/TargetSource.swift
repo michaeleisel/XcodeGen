@@ -169,57 +169,7 @@ extension TargetSource: ExpressibleByStringLiteral {
     }
 }
 
-extension TargetSource: JSONObjectConvertible, Decodable {
-
-    enum JSONKey: String, CodingKey {
-        case path
-        case name
-        case group
-        case compilerFlags
-        case headerVisibility
-        case excludes
-        case includes
-        case type
-        case optional
-        case buildPhase
-        case createIntermediateGroups
-        case attributes
-        case resourceTags
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: JSONKey.self)
-        path = try container.decode(String.self, forKey: .path)
-        name = try container.decodeIfPresent(String.self, forKey: .name)
-        group = try container.decodeIfPresent(String.self, forKey: .group)
-        do {
-            compilerFlags = try container.decode([String].self, forKey: .compilerFlags)
-        } catch {
-            let maybeCompilerFlagsString: String? = try container.decodeIfPresent(String.self, forKey: .compilerFlags)
-            compilerFlags = maybeCompilerFlagsString.map { $0.split(separator: " ").map { String($0) } } ?? []
-        }
-
-        if let headerVisibilityString = try container.decodeIfPresent(String.self, forKey: .headerVisibility) {
-            headerVisibility = HeaderVisibility(rawValue: headerVisibilityString)
-        }
-        excludes = try container.decodeIfPresent([String].self, forKey: .excludes) ?? []
-        includes = try container.decodeIfPresent([String].self, forKey: .includes) ?? []
-        if let typeString = try container.decodeIfPresent(String.self, forKey: .type) {
-            type = SourceType(rawValue: typeString)
-        }
-        optional = try container.decodeIfPresent(Bool.self, forKey: .optional) ?? TargetSource.optionalDefault
-
-        do {
-            let string: String = try container.decode(String.self, forKey: .buildPhase)
-            buildPhase = try BuildPhase(string: string)
-        } catch {
-            buildPhase = try container.decodeIfPresent(BuildPhase.self)
-        }
-
-        createIntermediateGroups = try container.decode(Bool.self, forKey: .createIntermediateGroups)
-        attributes = jsonDictionary.json(atKeyPath: "attributes") ?? []
-        resourceTags = jsonDictionary.json(atKeyPath: "resourceTags") ?? []
-    }
+extension TargetSource: JSONObjectConvertible {
 
     public init(jsonDictionary: JSONDictionary) throws {
         path = try jsonDictionary.json(atKeyPath: "path")
@@ -294,16 +244,7 @@ extension TargetSource.BuildPhase {
     }
 }
 
-extension TargetSource.BuildPhase: JSONObjectConvertible, Decodable {
-    enum JSONKey: String, CodingKey {
-        case copyFiles
-    }
-
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: JSONKey.self)
-        let settings = try container.decode(CopyFilesSettings.self, forKey: .copyFiles)
-        self = .copyFiles(settings)
-    }
+extension TargetSource.BuildPhase: JSONObjectConvertible {
 
     public init(jsonDictionary: JSONDictionary) throws {
         self = .copyFiles(try jsonDictionary.json(atKeyPath: "copyFiles"))
