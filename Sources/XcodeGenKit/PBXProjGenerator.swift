@@ -221,25 +221,7 @@ public class PBXProjGenerator {
             pbxProject.projects = subprojects
         }
 
-        let dependencies = try project.targets.map(self.generateTargetDependencies)
-        let ss2 = CACurrentMediaTime()
-        let queue = OperationQueue()
-        //queue.maxConcurrentOperationCount = 1
-        var output: [[SourceFile]?] = Array(repeating: nil, count: project.targets.count)
-        project.targets.enumerated().forEach { (idx, target) in
-            //return BlockOperation {
-                output[idx] = self.getAllSourceFiles(target)
-            //}
-        }
-        //queue.addOperations(operations, waitUntilFinished: true)
-        let ee2 = CACurrentMediaTime()
-        print("zz \(ee2 - ss2)")
-        for i in 0..<project.targets.count {
-            try generateTarget(project.targets[i], carthageDependencies: dependencies[i], sourceFiles: output[i]!)
-        }
-
-        //queue.waitUntilAllOperationsAreFinished()
-        //try project.targets.forEach(generateTarget)
+        try project.targets.forEach(generateTarget)
         try project.aggregateTargets.forEach(generateAggregateTarget)
 
         if !carthageFrameworksByPlatform.isEmpty {
@@ -287,16 +269,10 @@ public class PBXProjGenerator {
             derivedGroups.append(group)
         }
 
-        sourceGenerator.rootGroupsMutex.get { (rootGroups) -> () in
-            mainGroup.children = Array(rootGroups)
-        }
-        var ops: [Operation] = sortGroups(group: mainGroup)
+        mainGroup.children = Array(sourceGenerator.rootGroups)
+        sortGroups(group: mainGroup)
         // add derived groups at the end
-        ops += derivedGroups.flatMap { sortGroups(group: $0) }
-        let q = OperationQueue()
-        q.maxConcurrentOperationCount = 8
-        q.qualityOfService = .userInteractive
-        q.addOperations(ops, waitUntilFinished: true)
+        derivedGroups.forEach(sortGroups)
         mainGroup.children += derivedGroups
             .sorted(by: PBXFileElement.sortByNamePath)
             .map { $0 }
@@ -606,16 +582,12 @@ public class PBXProjGenerator {
         return pbxproj
     }
 
-    func generateTargetDependencies(_ target: Target) throws -> [Dependency] {
-        return carthageResolver.dependencies(for: target)
-    }
+    func generateTarget(_ target: Target) throws {
+        let carthageDependencies = carthageResolver.dependencies(for: target)
 
-    func getAllSourceFiles(_ target: Target) -> [SourceFile] {
-        return try! sourceGenerator.getAllSourceFiles(targetType: target.type, sources: target.sources)
+        let sourceFiles = try sourceGenerator.getAllSourceFiles(targetType: target.type, sources: target.sources)
             .sorted { $0.path.lastComponent < $1.path.lastComponent }
-    }
 
-    func generateTarget(_ target: Target, carthageDependencies: [Dependency], sourceFiles: [SourceFile]) throws {
         var plistPath: Path?
         var searchForPlist = true
         var anyDependencyRequiresObjCLinking = false
