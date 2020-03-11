@@ -11,19 +11,7 @@ extension Path {
     /// - `../a/b` simplifies to `../a/b`
     /// - `a/../../c` simplifies to `../c`
     public func simplifyingParentDirectoryReferences() -> Path {
-        var comps: [String] = []
-        for comp in normalize().components {
-            if comp == ".." {
-                if let last = comps.last, last != ".." {
-                    let _ = comps.dropLast()
-                } else {
-                    comps.append("..")
-                }
-            } else {
-                comps.append(comp)
-            }
-        }
-        return Path(components: comps)
+        normalize().components.reduce(Path(), +)
     }
 
     /// Returns the relative path necessary to go from `base` to `self`.
@@ -32,9 +20,9 @@ extension Path {
     /// - throws: Throws an error when the path types do not match, or when `base` has so many parent path components
     ///           that it refers to an unknown parent directory.
     public func relativePath(from base: Path) throws -> Path {
-        if string.hasPrefix(base.string) {
+        /*if string.hasPrefix(base.string) && base.string.hasPrefix("/") {
             return Path(String(string.suffix(from: base.string.endIndex)))
-        }
+        }*/
 
         enum PathArgumentError: Error {
             /// Can't back out of an unknown parent directory
@@ -77,6 +65,17 @@ extension Path {
         guard isAbsolute && base.isAbsolute || !isAbsolute && !base.isAbsolute else {
             throw PathArgumentError.unmatchedAbsolutePath
         }
+
+        /*base.string.withCString { baseBuffer in
+            string.withCString { buffer in
+                let relativeBuffer = PATRelativePath(baseBuffer, buffer)!
+                let str = String(bytesNoCopy: UnsafeMutableRawPointer(mutating: relativeBuffer), length: strlen(relativeBuffer), encoding: .utf8, freeWhenDone: true)!
+                let exp = Path(components: try! pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
+                                                              relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
+                                                              memo: []))
+                assert (Path(str) == exp)
+            }
+        }*/
 
         return Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
                                                    relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),

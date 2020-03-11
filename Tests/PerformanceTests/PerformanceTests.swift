@@ -60,13 +60,13 @@ class FixturePerformanceTests: XCTestCase {
         }
     }
 
-    func testFixtureGeneration() throws {
+    /*func testFixtureGeneration() throws {
         let project = try Project(path: specPath)
         measure {
             let generator = ProjectGenerator(project: project)
             _ = try! generator.generateXcodeProject()
         }
-    }
+    }*/
 
     func testFixtureWriting() throws {
         let project = try Project(path: specPath)

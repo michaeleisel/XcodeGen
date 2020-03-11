@@ -14,6 +14,10 @@ class PathExtensionsTests: XCTestCase {
         // These are based on ruby's tests for Pathname#relative_path_from:
         // https://github.com/ruby/ruby/blob/7c2bbd1c7d40a30583844d649045824161772e36/test/pathname/test_pathname.rb#L297
         describe {
+            $0.it("go") {
+                try expect(relativePath(to: "..", from: ".")) == ".."
+                try expect(relativePath(to: "a", from: ".")) == "a"
+            }
             $0.it("resolves single-level paths") {
                 try expect(relativePath(to: "a", from: "b")) == "../a"
                 try expect(relativePath(to: "a", from: "b/")) == "../a"
@@ -35,7 +39,6 @@ class PathExtensionsTests: XCTestCase {
                 try expect(relativePath(to: ".", from: "a")) == ".."
                 try expect(relativePath(to: ".", from: ".")) == "."
                 try expect(relativePath(to: "..", from: "..")) == "."
-                try expect(relativePath(to: "..", from: ".")) == ".."
             }
 
             $0.it("resolves multi-level paths") {

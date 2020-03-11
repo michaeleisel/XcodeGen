@@ -1165,7 +1165,19 @@ class ProjectGeneratorTests: XCTestCase {
         )
 
         describe("generateXcodeProject") {
-            $0.context("without projectDirectory") {
+            $0.it("go") {
+                let destinationPath = fixturePath
+                let project = Project(name: "test", targets: [frameworkWithSources])
+                let generator = ProjectGenerator(project: project)
+                let generatedProject = try generator.generateXcodeProject(in: destinationPath)
+                let plists = generatedProject.pbxproj.buildConfigurations.compactMap { $0.buildSettings["INFOPLIST_FILE"] as? Path }
+                try expect(plists.count) == 2
+                for plist in plists {
+                    try expect(plist) == "TestProject/App_iOS/Info.plist"
+                }
+            }
+        }
+            /*$0.context("without projectDirectory") {
                 $0.it("generate groups") {
                     let project = Project(name: "test", targets: [frameworkWithSources])
                     let generator = ProjectGenerator(project: project)
@@ -1261,7 +1273,7 @@ class ProjectGeneratorTests: XCTestCase {
                     }
                 }
             }
-        }
+        }*/
     }
 }
 

@@ -7,6 +7,28 @@ import Version
 import QuartzCore
 import PathKit
 
+public let parallelQueue: OperationQueue = {
+    let queue = OperationQueue()
+    queue.qualityOfService = .userInteractive
+    queue.maxConcurrentOperationCount = ProcessInfo.processInfo.activeProcessorCount
+    return queue
+}()
+
+public func parallelMap<T, U>(_ array: [T], transform: @escaping (T) -> (U)) -> [U] {
+    let queue = parallelQueue
+    let outMutex = Mutex(ContiguousArray<U?>(repeating: nil, count: array.count))
+    //var out = ContiguousArray<U?>(repeating: nil, count: array.count)
+    let ops = array.enumerated().map { (idx, elem) in
+        BlockOperation {
+            outMutex.get { out in out[idx] = transform(elem) }
+            //out[idx] = transform(elem)
+        }
+    }
+    queue.addOperations(ops, waitUntilFinished: true)
+    //return out.compactMap { $0 }
+    return outMutex.get { out in return out.compactMap { $0 } }
+}
+
 public class PBXProjGenerator {
 
     let project: Project
@@ -222,7 +244,24 @@ public class PBXProjGenerator {
             pbxProject.projects = subprojects
         }
 
-        try project.targets.forEach(generateTarget)
+        /*let carthageDependencies = project.targets.map {
+            self.carthageResolver.dependencies(for: $0)
+        }*/
+        let carthageDependencies = parallelMap(project.targets) {
+            self.carthageResolver.dependencies(for: $0)
+        }
+        let sourceFiles = try project.targets.map { target in
+            try sourceGenerator.getAllSourceFiles(targetType: target.type, sources: target.sources)
+        }
+        let sortedSourceFiles: [[SourceFile]] = parallelMap(sourceFiles) { files in
+            return files.sorted {
+                return $0.path.lastComponent < $1.path.lastComponent
+            }
+        }
+        try project.targets.enumerated().forEach { (arg) in
+            let (idx, target) = arg
+            try generateTarget(target, sourceFiles: sortedSourceFiles[idx], carthageDependencies: carthageDependencies[idx])
+        }
         try project.aggregateTargets.forEach(generateAggregateTarget)
 
         if !carthageFrameworksByPlatform.isEmpty {
@@ -271,16 +310,23 @@ public class PBXProjGenerator {
         }
 
         mainGroup.children = Array(sourceGenerator.rootGroups)
+        sortGroups(group: mainGroup)
+        // add derived groups at the end
+        derivedGroups.forEach(sortGroups)
+        mainGroup.children += derivedGroups
+            .sorted(by: PBXFileElement.sortByNamePath)
+            .map { $0 }
+        /*mainGroup.children = Array(sourceGenerator.rootGroups)
         var ops = sortGroups(group: mainGroup)
         let queue = OperationQueue()
         queue.qualityOfService = .userInteractive
         queue.maxConcurrentOperationCount = 8
         // add derived groups at the end
         ops += derivedGroups.flatMap(sortGroups)
-        queue.addOperations(ops, waitUntilFinished: true)
+        //queue.addOperations(ops, waitUntilFinished: true)
         mainGroup.children += derivedGroups
             .sorted(by: PBXFileElement.sortByNamePath)
-            .map { $0 }
+            .map { $0 }*/
 
         let assetTags = Set(project.targets
             .map { target in
@@ -550,32 +596,28 @@ public class PBXProjGenerator {
         return targetAttributes
     }
 
-    func sortGroups(group: PBXGroup) -> [Operation] {
-        group.children = group.children.filter { $0 != group }
+    func sortGroups(group: PBXGroup) {
         // sort children
-        let operation = BlockOperation {
-            let children = group.children
-                .sorted { child1, child2 in
-                    let sortOrder1 = child1.getSortOrder(groupSortPosition: self.project.options.groupSortPosition)
-                    let sortOrder2 = child2.getSortOrder(groupSortPosition: self.project.options.groupSortPosition)
+        let children = group.children
+            .sorted { child1, child2 in
+                let sortOrder1 = child1.getSortOrder(groupSortPosition: project.options.groupSortPosition)
+                let sortOrder2 = child2.getSortOrder(groupSortPosition: project.options.groupSortPosition)
 
-                    if sortOrder1 != sortOrder2 {
-                        return sortOrder1 < sortOrder2
+                if sortOrder1 != sortOrder2 {
+                    return sortOrder1 < sortOrder2
+                } else {
+                    if (child1.name, child1.path) != (child2.name, child2.path) {
+                        return PBXFileElement.sortByNamePath(child1, child2)
                     } else {
-                        if (child1.name, child1.path) != (child2.name, child2.path) {
-                            return PBXFileElement.sortByNamePath(child1, child2)
-                        } else {
-                            return child1.context ?? "" < child2.context ?? ""
-                        }
+                        return child1.context ?? "" < child2.context ?? ""
                     }
                 }
-            group.children = children
         }
+        group.children = children.filter { $0 != group }
 
         // sort sub groups
         let childGroups = group.children.compactMap { $0 as? PBXGroup }
-        let operations: [Operation] = [operation] + childGroups.flatMap { sortGroups(group: $0) }
-        return operations
+        childGroups.forEach(sortGroups)
     }
 
     func getPBXProj(from reference: ProjectReference) throws -> PBXProj {
@@ -587,31 +629,7 @@ public class PBXProjGenerator {
         return pbxproj
     }
 
-    func generateTarget(_ target: Target) throws {
-        let carthageDependencies = carthageResolver.dependencies(for: target)
-
-        var pathToLastComponent: [String: String] = [:]
-        let sourceFiles = try sourceGenerator.getAllSourceFiles(targetType: target.type, sources: target.sources)
-            .sorted {
-                let firstP: String
-                if let cachedFirstP = pathToLastComponent[$0.path.string] {
-                    firstP = cachedFirstP
-                } else {
-                    let c = $0.path.lastComponent
-                    pathToLastComponent[$0.path.string] = c
-                    firstP = c
-                }
-                let secondP: String
-                if let cachedSecondP = pathToLastComponent[$1.path.string] {
-                    secondP = cachedSecondP
-                } else {
-                    let c = $1.path.lastComponent
-                    pathToLastComponent[$1.path.string] = c
-                    secondP = c
-                }
-                return firstP < secondP
-        }
-
+    func generateTarget(_ target: Target, sourceFiles: [SourceFile], carthageDependencies: [Dependency]) throws {
         var plistPath: Path?
         var searchForPlist = true
         var anyDependencyRequiresObjCLinking = false
@@ -1233,7 +1251,6 @@ public class PBXProjGenerator {
     func getInfoPlist(_ sources: [TargetSource]) -> Path? {
         sources
             .lazy
-            .filter { $0.path.hasSuffix("Info.plist") }
             .map { self.project.basePath + $0.path }
             .compactMap { (path) -> Path? in
                 if path.isFile {

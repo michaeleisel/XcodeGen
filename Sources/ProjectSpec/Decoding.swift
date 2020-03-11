@@ -22,6 +22,7 @@ extension Dictionary where Key: JSONKey {
             }
             let queue = OperationQueue()
             queue.qualityOfService = .userInteractive
+            queue.maxConcurrentOperationCount = 8
             queue.addOperations(ops, waitUntilFinished: true)
             return itemOptionals.compactMap { $0 }
         } else {
