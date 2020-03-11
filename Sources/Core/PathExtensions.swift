@@ -1,8 +1,5 @@
 import Foundation
-import PathKit
 
-var za: Int = 0
-var zb: Int = 0
 
 extension Path {
     /// Returns a Path without any inner parent directory references.
@@ -15,7 +12,6 @@ extension Path {
     /// - `a/../../c` simplifies to `../c`
     public func simplifyingParentDirectoryReferences() -> Path {
         var comps: [String] = []
-        //var skips = 0
         for comp in normalize().components {
             if comp == ".." {
                 if let last = comps.last, last != ".." {
@@ -27,9 +23,7 @@ extension Path {
                 comps.append(comp)
             }
         }
-        let path = Path(components: comps)
-        //assert(path == normalize().components.reduce(Path(), +))
-        return path
+        return Path(components: comps)
     }
 
     /// Returns the relative path necessary to go from `base` to `self`.
@@ -41,17 +35,6 @@ extension Path {
         if string.hasPrefix(base.string) {
             return Path(String(string.suffix(from: base.string.endIndex)))
         }
-        /*if !string.contains("+") {
-            let relativeBuffer = string.withCString { stringBuffer in
-                return base.string.withCString { baseStringBuffer in
-                    return relativePath2(stringBuffer, baseStringBuffer)!
-                }
-            }
-
-            let path = String(cString: relativeBuffer)
-            free(UnsafeMutableRawPointer(mutating: relativeBuffer))
-            return Path(path)
-        }*/
 
         enum PathArgumentError: Error {
             /// Can't back out of an unknown parent directory
@@ -95,10 +78,8 @@ extension Path {
             throw PathArgumentError.unmatchedAbsolutePath
         }
 
-        let exp = Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
+        return Path(components: try pathComponents(for: ArraySlice(simplifyingParentDirectoryReferences().components),
                                                    relativeTo: ArraySlice(base.simplifyingParentDirectoryReferences().components),
                                                    memo: []))
-
-        return exp //Path(path)
     }
 }

@@ -1,5 +1,5 @@
 import Foundation
-import PathKit
+
 import ProjectSpec
 import XcodeProj
 import Yams
@@ -1232,6 +1232,7 @@ public class PBXProjGenerator {
     func getInfoPlist(_ sources: [TargetSource]) -> Path? {
         sources
             .lazy
+            .filter { $0.path.hasSuffix("Info.plist") }
             .map { self.project.basePath + $0.path }
             .compactMap { (path) -> Path? in
                 if path.isFile {
