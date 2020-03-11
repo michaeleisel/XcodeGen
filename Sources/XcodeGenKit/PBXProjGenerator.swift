@@ -5,6 +5,7 @@ import XcodeProj
 import Yams
 import Version
 import QuartzCore
+import PathKit
 
 public class PBXProjGenerator {
 

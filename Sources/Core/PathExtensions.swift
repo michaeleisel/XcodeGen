@@ -1,5 +1,5 @@
 import Foundation
-
+import PathKit
 
 extension Path {
     /// Returns a Path without any inner parent directory references.
