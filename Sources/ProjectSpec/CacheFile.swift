@@ -1,6 +1,7 @@
 import Foundation
 import Core
 import Version
+import PathKit
 
 public class CacheFile {
 
