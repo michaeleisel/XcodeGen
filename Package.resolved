@@ -24,7 +24,7 @@
         "repositoryURL": "https://github.com/michaeleisel/PathKit.git",
         "state": {
           "branch": "me-temp-fast",
-          "revision": "b4369c680d2982865cba1aec2158fa0f47c9b398",
+          "revision": "f5f8bc3c31a787e639b545205309c661c894d8e0",
           "version": null
         }
       },
@@ -33,7 +33,7 @@
         "repositoryURL": "https://github.com/michaeleisel/PathKitCExt.git",
         "state": {
           "branch": "master",
-          "revision": "67692a524701e481386047e432b08564cee1ea29",
+          "revision": "766dbfbc530618278be879a295c5b417c799541f",
           "version": null
         }
       },
@@ -78,7 +78,7 @@
         "repositoryURL": "https://github.com/michaeleisel/XcodeProj.git",
         "state": {
           "branch": "me-temp-fast",
-          "revision": "7fec7161be3ddad380ccb371ce3756044ca991f0",
+          "revision": "a5661f631ff01be5571789fda4f09a18564025da",
           "version": null
         }
       },
@@ -86,9 +86,9 @@
         "package": "XcodeProjCExt",
         "repositoryURL": "https://github.com/tuist/XcodeProjCExt",
         "state": {
-          "branch": null,
-          "revision": "8f22e5bd0bc83df6fc833331516afee650101d82",
-          "version": "7.8.0"
+          "branch": "master",
+          "revision": "3873f83da1a2c99207af387972589c495785b93f",
+          "version": null
         }
       },
       {
