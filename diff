@@ -1,0 +1,159 @@
+diff --git a/Sources/ProjectSpec/Decoding.swift b/Sources/ProjectSpec/Decoding.swift
+index 6d78794..d8ef959 100644
+--- a/Sources/ProjectSpec/Decoding.swift
++++ b/Sources/ProjectSpec/Decoding.swift
+@@ -4,18 +4,36 @@ import PathKit
+ import Yams
+ 
+ extension Dictionary where Key: JSONKey {
+-
+-    public func json<T: NamedJSONDictionaryConvertible>(atKeyPath keyPath: JSONUtilities.KeyPath, invalidItemBehaviour: InvalidItemBehaviour<T> = .remove) throws -> [T] {
++    public func json<T: NamedJSONDictionaryConvertible>(atKeyPath keyPath: JSONUtilities.KeyPath, invalidItemBehaviour: InvalidItemBehaviour<T> = .remove, parallel: Bool = false) throws -> [T] {
+         guard let dictionary = json(atKeyPath: keyPath) as JSONDictionary? else {
+             return []
+         }
+-        var items: [T] = []
+-        for (key, _) in dictionary {
+-            let jsonDictionary: JSONDictionary = try dictionary.json(atKeyPath: .key(key))
+-            let item = try T(name: key, jsonDictionary: jsonDictionary)
+-            items.append(item)
++        if parallel {
++            var itemOptionals: [T?] = Array(repeating: nil, count: dictionary.count)
++            var ops: [BlockOperation] = []
++            var idx: Int = 0
++            for (key, _) in dictionary {
++                ops.append(BlockOperation {[idx] in
++                    let jsonDictionary: JSONDictionary = try! dictionary.json(atKeyPath: .key(key))
++                    let item = try! T(name: key, jsonDictionary: jsonDictionary)
++                    itemOptionals[idx] = item
++                })
++                idx += 1
++            }
++            let queue = OperationQueue()
++            queue.qualityOfService = .userInteractive
++            queue.maxConcurrentOperationCount = 8
++            queue.addOperations(ops, waitUntilFinished: true)
++            return itemOptionals.compactMap { $0 }
++        } else {
++            var items: [T] = []
++            for (key, _) in dictionary {
++                let jsonDictionary: JSONDictionary = try dictionary.json(atKeyPath: .key(key))
++                let item = try T(name: key, jsonDictionary: jsonDictionary)
++                items.append(item)
++            }
++            return items
+         }
+-        return items
+     }
+ 
+     public func json<T: NamedJSONConvertible>(atKeyPath keyPath: JSONUtilities.KeyPath, invalidItemBehaviour: InvalidItemBehaviour<T> = .remove) throws -> [T] {
+diff --git a/Sources/ProjectSpec/Project.swift b/Sources/ProjectSpec/Project.swift
+index f14362e..7e936be 100644
+--- a/Sources/ProjectSpec/Project.swift
++++ b/Sources/ProjectSpec/Project.swift
+@@ -175,7 +175,7 @@ extension Project {
+         let configs: [String: String] = jsonDictionary.json(atKeyPath: "configs") ?? [:]
+         self.configs = configs.isEmpty ? Config.defaultConfigs :
+             configs.map { Config(name: $0, type: ConfigType(rawValue: $1)) }.sorted { $0.name < $1.name }
+-        targets = try jsonDictionary.json(atKeyPath: "targets").sorted { $0.name < $1.name }
++        targets = try jsonDictionary.json(atKeyPath: "targets", parallel: true).sorted { $0.name < $1.name }
+         aggregateTargets = try jsonDictionary.json(atKeyPath: "aggregateTargets").sorted { $0.name < $1.name }
+         projectReferences = try jsonDictionary.json(atKeyPath: "projectReferences").sorted { $0.name < $1.name }
+         schemes = try jsonDictionary.json(atKeyPath: "schemes")
+diff --git a/Sources/XcodeGenKit/CarthageDependencyResolver.swift b/Sources/XcodeGenKit/CarthageDependencyResolver.swift
+index e5d00cf..29d3e1e 100644
+--- a/Sources/XcodeGenKit/CarthageDependencyResolver.swift
++++ b/Sources/XcodeGenKit/CarthageDependencyResolver.swift
+@@ -10,11 +10,14 @@ import ProjectSpec
+ import PathKit
+ 
+ public class CarthageDependencyResolver {
++    static func getBuildPath(_ project: Project) -> String {
++        return project.options.carthageBuildPath ?? "Carthage/Build"
++    }
+ 
+     /// Carthage's base build path as specified by the
+     /// project's `SpecOptions`, or `Carthage/Build` by default
+     var buildPath: String {
+-        project.options.carthageBuildPath ?? "Carthage/Build"
++        return CarthageDependencyResolver.getBuildPath(project)
+     }
+ 
+     /// Carthage's executable path as specified by the
+@@ -24,10 +27,11 @@ public class CarthageDependencyResolver {
+     }
+ 
+     private let project: Project
+-    lazy var versionLoader = CarthageVersionLoader(buildPath: project.basePath + buildPath)
++    let versionLoader: CarthageVersionLoader
+ 
+     init(project: Project) {
+         self.project = project
++        versionLoader = CarthageVersionLoader(buildPath: project.basePath + CarthageDependencyResolver.getBuildPath(project))
+     }
+ 
+     /// Carthage's build path for the given platform
+diff --git a/Sources/XcodeGenKit/CarthageVersionLoader.swift b/Sources/XcodeGenKit/CarthageVersionLoader.swift
+index 644415c..6a5e092 100644
+--- a/Sources/XcodeGenKit/CarthageVersionLoader.swift
++++ b/Sources/XcodeGenKit/CarthageVersionLoader.swift
+@@ -9,24 +9,52 @@ import Foundation
+ import PathKit
+ import ProjectSpec
+ 
++class Mutex<T> {
++    var value: T
++    //var mutex: pthread_mutex_t = pthread_mutex_t()
++    var semaphore: DispatchSemaphore = DispatchSemaphore(value: 1)
++    init(_ value: T) {
++        self.value = value
++        //pthread_mutex_init(&mutex, nil)
++    }
++
++    func get<U>(closure: (inout T) throws -> (U)) rethrows -> U {
++        semaphore.wait()
++        defer { semaphore.signal() }
++        //pthread_mutex_lock(&mutex)
++        //defer { pthread_mutex_unlock(&mutex) }
++        let newValue = try closure(&value)
++        //value = newValue
++        return newValue
++    }
++
++    func get(closure: (inout T) -> ()) {
++        semaphore.wait()
++        closure(&value)
++        semaphore.signal()
++    }
++}
++
+ class CarthageVersionLoader {
+ 
+     private let buildPath: Path
+-    private var cachedFiles: [String: CarthageVersionFile] = [:]
++    private var cachedFilesMutex: Mutex<[String: CarthageVersionFile]> = Mutex([:])
+ 
+     init(buildPath: Path) {
+         self.buildPath = buildPath
+     }
+ 
+     func getVersionFile(for dependency: String) throws -> CarthageVersionFile {
+-        if let versionFile = cachedFiles[dependency] {
+-            return versionFile
++        return try cachedFilesMutex.get { cachedFiles in
++            if let versionFile = cachedFiles[dependency] {
++                return versionFile
++            }
++            let filePath = buildPath + ".\(dependency).version"
++            let data = try filePath.read()
++            let carthageVersionFile = try JSONDecoder().decode(CarthageVersionFile.self, from: data)
++            cachedFiles[dependency] = carthageVersionFile
++            return carthageVersionFile
+         }
+-        let filePath = buildPath + ".\(dependency).version"
+-        let data = try filePath.read()
+-        let carthageVersionFile = try JSONDecoder().decode(CarthageVersionFile.self, from: data)
+-        cachedFiles[dependency] = carthageVersionFile
+-        return carthageVersionFile
+     }
+ }
